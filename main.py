@@ -14,11 +14,11 @@ from typing import Union
 import os
 import yaml
 import random
-import csv
+import datetime
 
 from CR_HiFi.bluesky_gym import register_envs
 
-from ..common.callbacks import CSVLoggerCallback
+from ..common.callbacks import SafeLogCallback
 
 # Register BlueSky environments
 register_envs()
@@ -41,7 +41,7 @@ def load_algo_config(algo_name):
     :param algo_name: Name of the RL algorithm (e.g., "PPO", "SAC").
     :return: Dictionary with `policy` and `init_args`.
     """
-    config_path = f"atcenv_gym/atcenv/config/algos/{algo_name}.yaml"
+    config_path = f"CR_LoFi/atcenv/config/algos/{algo_name}.yaml"
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Configuration file for {algo_name} not found: {config_path}")
     
@@ -84,19 +84,24 @@ def load_algo_config(algo_name):
 def main(args):
     env_name = 'SectorCREnv-v0'
     algorithm = args.algorithm
+    timeout = args.timeout
     train = args.train
     pretrain = float(args.pre_train) if args.pre_train != "full" else "full"
     eval_episodes = 10
     render_mode = "human" if args.render else None
     window = args.window
+    restart = args.restart if hasattr(args, 'restart') else False
     
     # Set seed for reproducibility
     random.seed(args.seed)
     np.random.seed(args.seed)
     
-    # Define experiment folder
-    lofi_experiment_folder = f"/scratch/amoec/ATC_RL/LoFi-{algorithm}/{algorithm}_{pretrain}"
-    hifi_experiment_folder = f"/scratch/amoec/ATC_RL/HiFi-{algorithm}/{algorithm}_{pretrain}"
+    if args.baseline:
+        hifi_experiment_folder = f"/scratch/amoec/ATC_RL/baseline/HiFi-{algorithm}/run_{args.seed}"
+    else:
+        # Define experiment folder
+        lofi_experiment_folder = f"/scratch/amoec/ATC_RL/LoFi-{algorithm}/{algorithm}_{pretrain}"
+        hifi_experiment_folder = f"/scratch/amoec/ATC_RL/HiFi-{algorithm}/{algorithm}_{pretrain}"
     
     # Load algorithm configuration from YAML
     policy_type, algo_params = load_algo_config(algorithm)
@@ -105,7 +110,13 @@ def main(args):
     log_dir = f'{hifi_experiment_folder}/logs'
     os.makedirs(log_dir, exist_ok=True)
     file_name = 'results.csv'
-    csv_logger_callback = CSVLoggerCallback(log_dir, file_name) # Initialize custom CSV logger
+    csv_logger_callback = SafeLogCallback(
+        model_path=f"{hifi_experiment_folder}/model",
+        log_dir=log_dir,
+        log_filename=file_name,
+        timeout=timeout,
+        save_buffer=False
+    ) # Initialize custom CSV logger
 
     # Create environment
     env = gym.make(env_name, render_mode=None, seed=args.seed)
@@ -117,11 +128,25 @@ def main(args):
 
     # Initialize or load the model
     model_class = ALGORITHMS[algorithm]
-    if pretrain != "full":
-        # If no full training, then load the pre-trained model
+    model_path = f"{hifi_experiment_folder}/model"
+    
+    if restart and os.path.exists(model_path):
+        # Restart from checkpoint
+        print(f"Restarting training from checkpoint: {model_path}")
+        model = model_class.load(model_path, env=env)
+        
+        # For off-policy algorithms, try to load the replay buffer
+        if algorithm in OFF_POLICY:
+            rb_path = f"{model_path}_buffer"
+            if os.path.exists(rb_path):
+                model.load_replay_buffer(rb_path)
+                print(f"Replay buffer loaded from: {rb_path}")
+    elif pretrain != "full":
+        # If no restart but we're using pre-trained model
         model_path = f"{lofi_experiment_folder}/model"
         model = model_class.load(model_path, env=env)
         print(f"Loaded pre-trained model from {model_path}")
+        
         if algorithm in OFF_POLICY:
             rb_path = f"{model_path}_buffer"
             model.load_replay_buffer(rb_path)
@@ -132,40 +157,39 @@ def main(args):
 
     # Train the model
     if train:
-        model.learn(total_timesteps=2e6, callback=csv_logger_callback)
+        # Determine the number of timesteps left to be run
+        if pretrain == "full":
+            to_learn = int(2e6)
+        else:
+            to_learn = int((1 - pretrain / 100) * 3e6)
+        model.learn(total_timesteps=to_learn, callback=csv_logger_callback)
         model_path = f"{hifi_experiment_folder}/model"
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
         model.save(model_path)
         print(f"Model saved to {model_path}")
         
+        # For off-policy algorithms, save the replay buffer
+        if algorithm in OFF_POLICY:
+            rb_path = f"{model_path}_buffer"
+            model.save_replay_buffer(rb_path)
+            print(f"Replay buffer saved to: {rb_path}")
+        
         del model
         
     env.close()
-    
-    # Evaluate the trained model
-    if args.eval:
-        env = gym.make(env_name, render_mode=render_mode)
-        for i in range(eval_episodes):
-            done = truncated = False
-            obs, info = env.reset()
-            tot_rew = 0
-            while not (done or truncated):
-                action, _states = model.predict(obs, deterministic=True)
-                obs, reward, done, truncated, info = env.step(action[()])
-                tot_rew += reward
-            print(f"Episode {i + 1}/{eval_episodes}: Total reward = {tot_rew}")
-        env.close()
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train and evaluate RL models with BlueSky Gym.")
     parser.add_argument("--algorithm", type=str, choices=["SAC", "TD3", "DDPG", "PPO", "A2C", "DQN"], required=True, help="Algorithm to use.")
+    parser.add_argument("--timeout", type=datetime.datetime, required=True, help="Timeout for training.")
     parser.add_argument("--train", action="store_true", help="Train the model.")
     parser.add_argument("--eval", action="store_true", help="Evaluate the model.")
     parser.add_argument("--render", action="store_true", help="Render the environment during evaluation.")
     parser.add_argument("--pre_train", type=str, required=True, help="Pre-training percentage in LoFi env.")
     parser.add_argument("--window", type=int, required=True, help="Window size for the moving average.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument("--baseline", action="store_true", help="Flag to indicate baseline full training runs.")
+    parser.add_argument("--restart", action="store_true", help="Flag to indicate restarting from a checkpoint.")
     args = parser.parse_args()
 
     main(args)

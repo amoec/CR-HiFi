@@ -9,7 +9,7 @@ import numpy as np
 import CR_HiFi.bluesky_gym
 import CR_HiFi.bluesky_gym.envs
 
-bluesky_gym.register_envs()
+CR_HiFi.bluesky_gym.register_envs()
 
 from scripts.common import logger
 

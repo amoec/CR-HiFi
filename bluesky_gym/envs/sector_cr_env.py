@@ -43,7 +43,7 @@ class SectorCREnv(gym.Env):
     """
     metadata = {"render_modes": ["rgb_array","human"], "render_fps": 120}
     
-    def __init__(self, render_mode=None, ac_density_mode="normal", seed=None):
+    def __init__(self, render_mode=None, ac_density_mode="normal", seed=None, max_episode_len=150):
         self.window_width = 512
         self.window_height = 512
         self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
@@ -87,6 +87,10 @@ class SectorCREnv(gym.Env):
         
         # Initialize random number generator
         self.seed(seed)
+
+        # fixed episode length in gym steps
+        self.max_episode_len = max_episode_len
+        self.step_count = 0
     
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -120,9 +124,14 @@ class SectorCREnv(gym.Env):
         if self.render_mode == "human":
             self._render_frame()
 
+        # reset step counter
+        self.step_count = 0
+
         return observation, info
     
     def step(self, action):
+        # count this gym step
+        self.step_count += 1
         self._get_action(action)
         action_frequency = ACTION_FREQUENCY
         for _ in range(action_frequency):
@@ -134,8 +143,8 @@ class SectorCREnv(gym.Env):
         reward = self._get_reward()
         info = self._get_info()
 
-        # truncate instead of terminate to avoid aircraft learning to exit sector fast
-        truncate = self._check_inside_airspace()
+        # truncate when reaching fixed max length
+        truncate = self.step_count >= self.max_episode_len
 
         return observation, reward, False, truncate, info
     

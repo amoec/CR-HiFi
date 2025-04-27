@@ -18,7 +18,7 @@ import CR_HiFi.bluesky_gym.envs
 
 from CR_HiFi.bluesky_gym.utils import logger
 
-bluesky_gym.register_envs()
+CR_HiFi.bluesky_gym.register_envs()
 
 env_name = 'SectorCREnv-v0'
 algorithm = SAC
