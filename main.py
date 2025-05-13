@@ -133,7 +133,7 @@ def main(args):
     if restart and os.path.exists(model_path):
         # Restart from checkpoint
         print(f"Restarting training from checkpoint: {model_path}")
-        model = model_class.load(model_path, env=env)
+        model = model_class.load(model_path, env=env, device="cuda")
         
         # For off-policy algorithms, try to load the replay buffer
         if algorithm in OFF_POLICY:
@@ -144,7 +144,7 @@ def main(args):
     elif pretrain != "full":
         # If no restart but we're using pre-trained model
         model_path = f"{lofi_experiment_folder}/model"
-        model = model_class.load(model_path, env=env)
+        model = model_class.load(model_path, env=env, device="cuda")
         print(f"Loaded pre-trained model from {model_path}")
         
         if algorithm in OFF_POLICY:
@@ -153,7 +153,7 @@ def main(args):
             print(f"Replay buffer loaded from: {rb_path}")
     else:
         # Default model hyperparams
-        model = model_class(policy_type, env, policy_kwargs=policy_kwargs)
+        model = model_class(policy_type, env, policy_kwargs=policy_kwargs, device="cuda")
 
     # Train the model
     if train:
